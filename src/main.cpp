@@ -41,13 +41,14 @@ int main(int argc, char* argv[]) {
     for (int idx = 0; idx < total; ++idx) {
         std::cout << "\nInstancja " << idx + 1 << std::endl;
         
-        std::pair<std::vector<int>, int> bfResult, johnsonResult, bnbResult, quickResult, nehResult, saResult;
+        std::pair<std::vector<int>, int> bfResult, johnsonResult, bnbResult, quickResult, nehResult, saResult, tabuResult;
         //double bfTime = runAlgorithm([&]() { bfResult = problem.bruteForce(idx); });
         //double johnsonTime = runAlgorithm([&]() { johnsonResult = problem.johnson(idx); });
         //double bnbTime = runAlgorithm([&]() { bnbResult = problem.branchAndBound(idx); });
         //double quickTime = runAlgorithm([&]() { quickResult = problem.quickNEH(idx); });
-        double nehTime = runAlgorithm([&]() { nehResult = problem.neh(idx); });
+        //double nehTime = runAlgorithm([&]() { nehResult = problem.neh(idx); });
         double saTime = runAlgorithm([&]() { saResult = problem.simulatedAnnealing(idx); });
+        //double tabuTime = runAlgorithm([&]() { tabuResult = problem.tabuSearch(idx); });
 
         // Wypisujemy wyniki – format: <algorytm>: <czas>;<Cmax>
         // Używamy std::scientific do zapisu czasu w notacji naukowej.
@@ -55,8 +56,9 @@ int main(int argc, char* argv[]) {
         //std::cout << std::scientific << johnsonTime << ";" << johnsonResult.second << std::endl;
         //std::cout <<  std::scientific << bnbTime << ";" << bnbResult.second << std::endl;
         //std::cout <<  std::scientific << quickTime << ";" << quickResult.second << std::endl;
-        std::cout <<  std::scientific << nehTime << ";" << nehResult.second << std::endl;
+        //std::cout <<  std::scientific << nehTime << ";" << nehResult.second << std::endl;
         std::cout <<  std::scientific << saTime << ";" << saResult.second << std::endl;
+        //std::cout <<  std::scientific << tabuTime << ";" << tabuResult.second << std::endl;
     }
 
     return 0;

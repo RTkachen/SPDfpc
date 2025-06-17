@@ -444,7 +444,7 @@ std::pair<std::vector<int>, int> Problem::simulatedAnnealing(int instanceIndex) 
     int n = inst.n_jobs;
     
     // Początkowe rozwiązanie uzyskujemy z heurystyki NEH (możesz zmodyfikować – np. losowe lub NEH).
-    std::pair<std::vector<int>, int> initSolution = neh(instanceIndex);
+    std::pair<std::vector<int>, int> initSolution = quickNEH(instanceIndex);
     std::vector<int> currentSequence = initSolution.first;
     int currentCost = initSolution.second;
     
@@ -453,15 +453,20 @@ std::pair<std::vector<int>, int> Problem::simulatedAnnealing(int instanceIndex) 
     int bestCost = currentCost;
     
     // Ustawienia parametrów symulowanego wyżarzania.
-    double T = 10000.0;      // temperatura początkowa – można dobrać eksperymentalnie
-    double Tmin = 0.001;    // temperatura końcowa
-    double alpha = 0.95;    // współczynnik chłodzenia (temperatura jest mnożona przez alpha)
+    double T = 4500.0;      // temperatura początkowa – można dobrać eksperymentalnie
+    double Tmin = 0.01;    // temperatura końcowa
+    double alpha = 0.97;    // współczynnik chłodzenia (temperatura jest mnożona przez alpha)
     int iterPerTemp = 1000;  // liczba prób (iteracji) dla danej temperatury
     
     // Zainicjujemy generator liczb losowych.
     std::mt19937 rng(std::random_device{}());
     std::uniform_real_distribution<double> distReal(0.0, 1.0);
     std::uniform_int_distribution<int> distPos(0, n - 1);
+
+    std::ofstream ofs("sa_history.csv");
+    ofs << "sampleIdx,bestCost\n";
+
+    int sampleIdx = 0;
     
     // Główna pętla wyżarzania.
     while (T > Tmin) {
@@ -493,9 +498,157 @@ std::pair<std::vector<int>, int> Problem::simulatedAnnealing(int instanceIndex) 
                 }
             }
         }
+        ++sampleIdx;
+        ofs << sampleIdx << "," << bestCost << "\n";
         // Zmniejszamy temperaturę.
         T *= alpha;
     }
-    
+    ofs.close();
     return { bestSequence, bestCost };
+}
+std::vector<int> Problem::computeCriticalPath(
+    const std::vector<int>& sequence,
+    int instanceIndex) const
+{
+    const Instance& inst = instances_[instanceIndex];
+    int n = inst.n_jobs;
+    int m = inst.m_machines;
+
+    // 1) Oblicz DP, dp[i][k] = Cmax dla prefixu [0..i] na maszynie k
+    std::vector<std::vector<int>> dp(n, std::vector<int>(m, 0));
+    for (int i = 0; i < n; ++i) {
+        int job = sequence[i];
+        for (int k = 0; k < m; ++k) {
+            int t_before = (i > 0) ? dp[i-1][k] : 0;
+            int t_left   = (k > 0) ? dp[i][k-1] : 0;
+            dp[i][k] = std::max(t_before, t_left) + inst.times[job][k];
+        }
+    }
+
+    // 2) Back‑tracking od (n-1, m-1) do (0,0), zbierając indeksy i
+    std::vector<int> critPath;
+    int i = n-1, k = m-1;
+    while (i > 0 || k > 0) {
+        critPath.push_back(i);
+        int t_before = (i > 0) ? dp[i-1][k] : -1;
+        int t_left   = (k > 0) ? dp[i][k-1] : -1;
+        // Skąd przyszliśmy?
+        if (t_before >= t_left) {
+            // ruch "z góry"
+            --i;
+        } else {
+            // ruch "z lewej"
+            --k;
+        }
+    }
+    critPath.push_back(0);
+
+    // Ścieżka jest w kolejności od końca, odwróć ją:
+    std::reverse(critPath.begin(), critPath.end());
+    return critPath;
+}
+
+int Problem::computeCmaxSwapDelta(
+    const std::vector<int>& sequence,
+    int instanceIndex,
+    int i,
+    int j,
+    int originalCmax) const
+{
+    const Instance& inst = instances_[instanceIndex];
+    int n = inst.n_jobs;
+    int m = inst.m_machines;
+
+    // Skopiuj i zamień zadania
+    std::vector<int> newSeq = sequence;
+    std::swap(newSeq[i], newSeq[j]);
+
+    // Oblicz nowy Cmax (pełna DP)
+    // dp[k][r] = czas zakończenia k-tego zadania na maszynie r
+    std::vector<std::vector<int>> dp(n, std::vector<int>(m, 0));
+    for (int idx = 0; idx < n; ++idx) {
+        int job = newSeq[idx];
+        for (int r = 0; r < m; ++r) {
+            int t_before = (idx > 0) ? dp[idx-1][r] : 0;
+            int t_left   = (r > 0)   ? dp[idx][r-1] : 0;
+            dp[idx][r] = std::max(t_before, t_left) + inst.times[job][r];
+        }
+    }
+
+    int newCmax = dp[n-1][m-1];
+    return newCmax;
+}
+
+std::pair<std::vector<int>,int> Problem::tabuSearch(int instanceIndex) const {
+    const Instance& inst = instances_[instanceIndex];
+    int n = inst.n_jobs;
+
+    // 1) start z NEH
+    auto [seq, cost] = quickNEH(instanceIndex);
+    std::vector<int> bestSeq = seq;
+    int bestCost = cost;
+    std::vector<int> currSeq = seq;
+    int currCost = cost;
+
+    // 2) tabu lista
+    std::vector<std::vector<int>> tabu(n, std::vector<int>(n, 0));
+    int iter = 0, noImpr = 0;
+    const int MAX_ITER = 100;
+    const int MAX_NO_IMP = 700;
+    int tabuTenure = std::max(3, static_cast<int>(std::sqrt(n)));
+
+    // generator
+    std::mt19937 rng(std::random_device{}());
+
+    // otwórz plik CSV
+    //std::ofstream csv("tabu_history.csv");
+    //csv << "sampleIdx,bestCost\n";
+    int sampleIdx = 0;
+
+    // główna pętla
+    while (iter < MAX_ITER && noImpr < MAX_NO_IMP) {
+        ++iter;
+
+        // tu możesz zostawić swoje DEBUG-y...
+        // ...
+
+        // wybór najlepszego ruchu na krytycznej ścieżce
+        std::vector<int> critPath = computeCriticalPath(currSeq, instanceIndex);
+        std::pair<int,int> bestMove = {-1,-1};
+        int bestDelta = std::numeric_limits<int>::max();
+        for (int k = 0; k + 1 < (int)critPath.size(); ++k) {
+            int i = critPath[k], j = critPath[k+1];
+            int delta = computeCmaxSwapDelta(currSeq, instanceIndex, i, j, currCost) - currCost;
+            bool isTabu = tabu[i][j] > iter;
+            if ((!isTabu || currCost + delta < bestCost) && delta < bestDelta) {
+                bestDelta = delta;
+                bestMove = {i, j};
+            }
+        }
+        if (bestMove.first < 0) break;
+
+        // wykonanie ruchu
+        int i = bestMove.first, j = bestMove.second;
+        std::swap(currSeq[i], currSeq[j]);
+        currCost += bestDelta;
+
+        // update tabu
+        tabu[i][j] = tabu[j][i] = iter + tabuTenure;
+
+        // aktualizacja najlepszego
+        if (currCost < bestCost) {
+            bestCost = currCost;
+            bestSeq = currSeq;
+            noImpr = 0;
+        } else {
+            ++noImpr;
+        }
+
+        // zapisz nową próbkę do CSV
+        ++sampleIdx;
+        //csv << sampleIdx << "," << bestCost << "\n";
+    }
+
+    //csv.close();
+    return {bestSeq, bestCost};
 }
